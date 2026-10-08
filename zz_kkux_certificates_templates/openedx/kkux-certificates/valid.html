@@ -1,0 +1,682 @@
+<%page expression_filter="h"/>
+<%inherit file="../main.html" />
+<%namespace name='static' file='../static_content.html'/>
+
+<%!
+from social_django.models import UserSocialAuth
+from django.utils.translation import gettext as _
+from django.conf import settings
+import logging
+from datetime import datetime
+from urllib.parse import unquote, quote
+
+def format_certificate_date(value):
+    """Normalize date format."""
+    if not value: return ""
+    if hasattr(value, "strftime"):
+        try: return value.strftime("%d / %m / %Y")
+        except Exception: pass
+    s = str(value).strip() if value else ""
+    if not s: return ""
+    for fmt in ["%Y-%m-%d", "%Y/%m/%d", "%d/%m/%Y", "%d-%m-%Y"]:
+        try: return datetime.strptime(s, fmt).strftime("%d / %m / %Y")
+        except Exception: continue
+    return s
+
+def get_national_id(saudi_user):
+    """Get the national ID of the Saudi user"""
+    if not saudi_user:
+        return None
+    nafath_data = UserSocialAuth.objects.filter(user_id=saudi_user.id, provider='tpa-saml').first()
+    if not nafath_data:
+        return None
+    return nafath_data.extra_data.get('name_id')
+%>
+
+<%
+    # --- DEFENSIVE CONTEXT: Prevents "NameError" in Preview Mode ---
+    facebook_share_enabled = context.get('facebook_share_enabled', False)
+    twitter_share_enabled = context.get('twitter_share_enabled', False)
+    share_url = context.get('share_url', '')
+    full_course_image_url = context.get('full_course_image_url', '')
+    facebook_share_text = context.get('facebook_share_text', 'Check out my certificate!')
+    twitter_url = context.get('twitter_url', '#')
+    linked_in_url = context.get('linked_in_url', '#')
+
+    accomplishment_copy_course_name = context.get('accomplishment_copy_course_name', '')
+
+    try:
+        accomplishment_user_id = int(context.get('accomplishment_user_id', 0))
+    except (ValueError, TypeError):
+        accomplishment_user_id = 0
+
+    # --- Clean document_title: decode any URL-encoded chars (e.g. %20 → space) ---
+    _raw_title = context.get('document_title', '') or ''
+    clean_title = unquote(_raw_title).strip()
+
+    # --- Pre-defined Arabic sharing template ---
+    _course_label = accomplishment_copy_course_name or clean_title or 'الدورة'
+    share_text = (
+        'أشارككم أحد إنجازاتي: اجتياز دورة ' + _course_label +
+        ' بنجاح عبر منصة KKUx أكاديمية جامعة الملك خالد.\n'
+        '#KKUx #جامعة_الملك_خالد'
+    )
+
+    # Build social sharing URLs with pre-defined text
+    _enc_url  = quote(share_url, safe='')
+    _enc_text = quote(share_text, safe='')
+    _enc_title = quote(clean_title, safe='')
+    _enc_summary = quote(share_text, safe='')
+
+    # Twitter/X: full text + URL
+    custom_twitter_url = (
+        'https://twitter.com/intent/tweet?text=' + _enc_text + '&url=' + _enc_url
+    )
+    # LinkedIn shareArticle: url + title + summary (still works for pre-fill)
+    custom_linkedin_url = (
+        'https://www.linkedin.com/shareArticle?mini=true'
+        '&url=' + _enc_url +
+        '&title=' + _enc_title +
+        '&summary=' + _enc_summary
+    )
+    # Facebook: only URL + hashtag supported (text pre-fill was removed by FB in 2017)
+    custom_fb_url = (
+        'https://www.facebook.com/sharer/sharer.php?u=' + _enc_url +
+        '&hashtag=%23KKUx'
+    )
+
+    # Look up the certificate owner, not the currently logged-in viewer.
+    certificate_user = user
+    if accomplishment_user_id:
+        try:
+            from django.contrib.auth import get_user_model
+            certificate_user = get_user_model().objects.get(id=accomplishment_user_id)
+        except Exception:
+            certificate_user = user
+
+    national_id = get_national_id(certificate_user)
+%>
+
+<%block name="bodyclass">view-certificate</%block>
+<%block name="pagetitle">${unquote(context.get('document_title', '') or '').strip()}</%block>
+
+<%block name="headextra">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+
+    ## Open Graph tags — always emitted (crawlers don't care about login state)
+    <meta property="og:url"         content="${share_url}" />
+    <meta property="og:type"        content="website" />
+    <meta property="og:title"       content="${unquote(context.get('document_title', '') or '').strip()}" />
+    <meta property="og:description" content="KKUx - King Khalid University Academy" />
+    <meta property="og:site_name"   content="KKUx" />
+    % if full_course_image_url:
+    <meta property="og:image"       content="${full_course_image_url}" />
+    <meta property="og:image:width"  content="1200" />
+    <meta property="og:image:height" content="630" />
+    % endif
+
+    ## Twitter / X card tags
+    <meta name="twitter:card"        content="summary_large_image" />
+    <meta name="twitter:title"       content="${unquote(context.get('document_title', '') or '').strip()}" />
+    <meta name="twitter:description" content="KKUx - King Khalid University Academy" />
+    % if full_course_image_url:
+    <meta name="twitter:image"       content="${full_course_image_url}" />
+    % endif
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <style>
+    /* --- Main Page Layout (Responsive Iframe Wrapper) --- */
+    body.view-certificate { background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%) !important; }
+    .view-certificate .content-wrapper { max-width: 100% !important; width: 100% !important; padding: 40px 20px; min-height: 90vh; }
+    .view-certificate main { padding: 0 !important; margin: 0 auto !important; }
+
+    .certificate-wrapper {
+        max-width: 1200px; width: 100%; margin: 20px auto 0;
+        display: flex; flex-direction: row; align-items: flex-start; justify-content: center;
+        gap: 30px; direction: rtl;
+    }
+
+    /* Iframe Container */
+    .certificate-main {
+        flex: 1; max-width: 842px; width: 100%; display: flex; flex-direction: column;
+    }
+
+    .iframe-wrapper {
+        width: 100%; position: relative; background: white;
+        aspect-ratio: 842 / 595; /* A4 Landscape — more reliable than padding-bottom trick in flex containers */
+        box-shadow: 0 10px 30px rgba(0,0,0,0.1); border-radius: 0px; overflow: hidden;
+    }
+
+    /* Skeleton loader — shown until iframe fires load */
+    .iframe-wrapper::before {
+        content: '';
+        position: absolute; inset: 0;
+        background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+        background-size: 200% 100%;
+        animation: cert-shimmer 1.4s infinite;
+        z-index: 2;
+        transition: opacity 0.3s;
+    }
+    .iframe-wrapper.cert-loaded::before { opacity: 0; pointer-events: none; }
+    @keyframes cert-shimmer {
+        0%   { background-position: 200% 0; }
+        100% { background-position: -200% 0; }
+    }
+
+    .certificate-iframe {
+        position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none;
+        z-index: 1;
+    }
+
+    /* Sidebar Actions */
+    .certificate-actions {
+        width: 280px; flex-shrink: 0; background: white; padding: 25px;
+        border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+        position: sticky; top: 20px;
+    }
+    .certificate-actions h3 {
+        font-family: 'IBM Plex Sans Arabic', sans-serif; font-size: 18px; color: #092a1e; font-weight: 700;
+        margin-bottom: 20px; padding-bottom: 15px; border-bottom: 1px solid #eee;
+    }
+    .action-buttons { display: flex; flex-direction: column; gap: 12px; }
+
+    .action-button {
+        display: flex; align-items: center; justify-content: center; gap: 10px;
+        padding: 12px 16px; min-height: 44px; /* minimum touch target */
+        border-radius: 6px; font-family: 'IBM Plex Sans Arabic' !important; font-weight: 700 !important;
+        text-decoration: none; transition: transform 0.2s, opacity 0.2s; border: none; cursor: pointer;
+        width: 100%; font-size: 14px;
+        box-shadow: none !important;
+        text-shadow: none !important;
+    }
+    .action-button:hover {
+        transform: translateY(-2px); opacity: 0.9;
+        background-image: none !important;
+    }
+    .action-button:active { transform: translateY(0); opacity: 1; }
+
+    .action-print { background: #007359; color: white; }
+    .action-fb    { background: #1877F2; color: white; }
+    .action-x     { background: #000000; color: white; }
+    .action-li    { background: #0A66C2; color: white; }
+
+    /* ── Breakpoint: Tablet landscape / small desktop ── */
+    @media (max-width: 1200px) {
+        .certificate-wrapper { flex-direction: column; align-items: center; }
+        .certificate-main { flex: none; width: 100%; }
+        .certificate-actions {
+            width: 90%; max-width: 842px; position: static;
+            max-height: none; overflow-y: visible;
+        }
+        .action-buttons { flex-direction: row; flex-wrap: wrap; }
+        .action-button { flex: 1 1 45%; }
+    }
+
+    /* ── Breakpoint: Tablet portrait / large phone ── */
+    @media (max-width: 768px) {
+        .view-certificate .content-wrapper { padding: 24px 16px; }
+        .certificate-wrapper { gap: 20px; margin-top: 12px; }
+        .certificate-actions { width: 100%; padding: 20px; }
+        .certificate-actions h3 { font-size: 16px; margin-bottom: 16px; }
+        .action-button { flex: 1 1 calc(50% - 6px); font-size: 13px; }
+    }
+
+    /* ── Breakpoint: Small phone ── */
+    @media (max-width: 480px) {
+        .view-certificate .content-wrapper { padding: 16px 10px; }
+        .certificate-wrapper { gap: 16px; margin-top: 8px; }
+        .certificate-actions { width: 100%; padding: 16px; border-radius: 8px; }
+        .certificate-actions h3 { font-size: 15px; margin-bottom: 14px; }
+        .action-button { flex: 1 1 100%; font-size: 13px; padding: 12px 16px; }
+    }
+    </style>
+
+    ## IMPORTANT: type="text/plain" prevents these styles from being applied to the outer page.
+    ## The JS reads .innerHTML and injects it into the iframe's <head> instead.
+    <script type="text/plain" id="cert-internal-styles">
+        body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
+
+        /* Scaler to fit iframe width */
+        #scaler { transform-origin: top left; position: absolute; top: 0; left: 0; }
+
+        .certificate-container {
+            width: 842px; height: 595px; position: relative; direction: ltr;
+            background-color: #FFFFFF;
+            background-image: url('${static.url("certificates/images/kkux_cert_background.png")}');
+            background-size: cover; background-position: center;
+            font-family: 'IBM Plex Sans Arabic', sans-serif;
+            overflow: hidden;
+        }
+
+        /* ---- Arabic text block (right side) ---- */
+        .arabic-block {
+            position: absolute;
+            left: 63.32%; top: 37.48%;
+            width: 33.75%; height: 34.42%;
+            direction: rtl; text-align: right;
+            font-family: 'IBM Plex Sans Arabic', sans-serif;
+            font-size: 12px; line-height: 1.65;
+            color: #000000; z-index: 10;
+            overflow: hidden;
+        }
+        .arabic-block .cert-intro   { font-size: 9px; font-weight: 400; display: block; margin-bottom: 10px; }
+        .arabic-block .cert-name-ar { font-size: 16px; font-weight: 700; color: #02755B; display: block; white-space: nowrap; overflow: hidden; }
+        .arabic-block .cert-id-ar   { font-size: 12px; font-weight: 700; color: #02755B; display: block; margin-bottom: 10px; }
+        .arabic-block .cert-body-ar { font-size: 11px; font-weight: 400; display: block; line-height: 1.7; }
+        .cert-accordingly { display: block; margin-top: 10px; }
+
+        /* ---- English text block (left side) ---- */
+        .english-block {
+            position: absolute;
+            left: 24.2%; top: 37.48%;
+            width: 33.75%; height: 36.13%;
+            direction: ltr; text-align: left;
+            font-family: 'IBM Plex Sans Arabic', sans-serif;
+            font-size: 11px; line-height: 1.65;
+            color: #000000; z-index: 10;
+            overflow: hidden;
+        }
+        .english-block .cert-intro    { font-size: 9px; font-weight: 400; display: block; margin-bottom: 10px; }
+        .english-block .cert-name-en  { font-size: 14px; font-weight: 700; color: #02755B; display: block; white-space: nowrap; overflow: hidden; }
+        .english-block .cert-id-en    { font-size: 11px; font-weight: 700; color: #02755B; display: block;  margin-bottom: 10px; }
+        .english-block .cert-body-en  { font-size: 10px; font-weight: 400; display: block; line-height: 1.7; }
+
+        /* ---- QR code ---- */
+        /* Sizing: percentage of the 842×595 certificate so the QR scales with the
+           rest of the certificate, capped at 94px on screen so it doesn't get
+           comically large in wide viewports. The QR is positioned 88.8% from the
+           left and centered horizontally with translateX(-50%). */
+        .qr-image {
+            position: absolute;
+            left: 88.8%; top: 72%;
+            width: 11.16%;            /* 94 / 842 ≈ 11.16% */
+            aspect-ratio: 1 / 1;       /* keep square regardless of viewport */
+            max-width: 94px;
+            max-height: 94px;
+            z-index: 10;
+            transform: translateX(-50%);
+            transform-origin: center top;
+            background-color: #f7f7f7;
+            border: 1px solid black;
+            padding: 3px;
+            box-sizing: border-box;
+        }
+        .qr-image canvas, .qr-image img {
+            display: block;
+            width: 100% !important;
+            height: 100% !important;
+            mix-blend-mode: darken;
+        }
+
+        /* --- THE PRINT FIX --- */
+        @media print {
+            @page { size: 842px 595px; margin: 0; }
+
+            html, body {
+                width: 842px !important;
+                height: 595px !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                background: white !important;
+                overflow: hidden !important;
+            }
+
+            #scaler { transform: none !important; position: static !important; }
+
+            .certificate-container {
+                width: 842px !important;
+                height: 595px !important;
+                transform: none !important;
+                transform-origin: top left !important;
+                box-shadow: none !important;
+                border-radius: 0 !important;
+                background-size: 842px 595px !important;
+                background-position: center center !important;
+                background-repeat: no-repeat !important;
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+                overflow: hidden !important;
+                page-break-inside: avoid !important;
+                page-break-before: avoid !important;
+                page-break-after: avoid !important;
+                break-inside: avoid !important;
+                break-before: avoid !important;
+                break-after: avoid !important;
+                margin: 0 auto !important;
+            }
+
+            .certificate-container * {
+                -webkit-print-color-adjust: exact !important;
+                box-shadow: none !important;
+                page-break-inside: avoid !important;
+                break-inside: avoid !important;
+            }
+
+            /* Force QR back to 94px in print — undo the responsive %. */
+            .qr-image {
+                width: 94px !important;
+                height: 94px !important;
+                max-width: 94px !important;
+                max-height: 94px !important;
+                padding: 3px !important;
+                image-rendering: pixelated !important;
+                image-rendering: crisp-edges !important;
+                -webkit-filter: none !important;
+                page-break-inside: avoid !important;
+                break-inside: avoid !important;
+            }
+            .qr-image canvas, .qr-image img {
+                width: 88px !important;
+                height: 88px !important;
+            }
+        }
+    </script>
+</%block>
+
+<div class="certificate-wrapper">
+    <div class="certificate-main">
+        <div class="iframe-wrapper">
+            <iframe id="cert-frame" class="certificate-iframe" title="Certificate" scrolling="no"></iframe>
+        </div>
+    </div>
+
+    <div class="certificate-actions">
+        <h3>${_("Certificate Options:")}</h3>
+        <div class="action-buttons">
+            <button class="action-button action-print" onclick="printIframe()">
+                <i class="fas fa-print icon"></i> <span>${_("Print Certificate")}</span>
+            </button>
+
+            % if user.is_authenticated and user.id == accomplishment_user_id:
+                % if facebook_share_enabled:
+            <button class="action-button action-fb" onclick="window.open('${custom_fb_url}', 'fb', 'width=600,height=400');">
+                <i class="fab fa-facebook icon"></i> <span>${_("Share on Facebook")}</span>
+            </button>
+                % endif
+                % if twitter_share_enabled:
+            <button class="action-button action-x" onclick="window.open('${custom_twitter_url}', 'x', 'width=600,height=400');">
+                <i class="fab fa-x-twitter icon"></i> <span>${_("Share on X")}</span>
+            </button>
+                % endif
+                % if linked_in_url:
+            <button class="action-button action-li" onclick="window.open('${custom_linkedin_url}', 'li', 'width=600,height=400');">
+                <i class="fab fa-linkedin icon"></i> <span>${_("Add to LinkedIn")}</span>
+            </button>
+                % endif
+            % endif
+        </div>
+    </div>
+</div>
+
+<template id="certificate-source">
+    <div id="scaler">
+        <div class="certificate-container">
+
+            <%
+                fdate = format_certificate_date(certificate_date_issued)
+                cert_id_short = str(certificate_id_number)[:8].upper() if certificate_id_number else ''
+            %>
+
+            <!-- Arabic block (right side) -->
+            <div class="arabic-block">
+                <span class="cert-intro">تشهد جامعة الملك خالد ممثلة في أكاديمية KKUx بأن</span>
+                <span class="cert-name-ar">${accomplishment_copy_name}</span>
+                % if national_id:
+                <span class="cert-id-ar">هـوية رقم : ${national_id}</span>
+                % else:
+                <span class="cert-id-ar" style="visibility: hidden">&nbsp;</span>
+                % endif
+                <span class="cert-body-ar">
+                    قد أكمل/ت بنجاح جميع متطلبات الدورة التدريبية
+                    <strong>${accomplishment_copy_course_name}</strong>
+                    عبر أكاديمية KKUx وبحضور إلكتروني كامل.
+                    <span class="cert-accordingly">وبناءً عليه، تم منح هذه الشهادة تقديرًا للالتزام واستيفاء متطلبات التدريب.
+                    % if fdate:
+                    بتاريخ ${fdate}.
+                    % endif
+                    </span>
+                </span>
+            </div>
+
+            <!-- English block (left side) -->
+            <div class="english-block">
+                <span class="cert-intro">King Khalid University, represented by KKUx Academy, certifies that</span>
+                <span class="cert-name-en">${accomplishment_copy_name}</span>
+                % if national_id:
+                <span class="cert-id-en">National ID No: ${national_id}</span>
+                % else:
+                <span class="cert-id-en" style="visibility: hidden">&nbsp;</span>
+                % endif
+                <span class="cert-body-en">
+                    Has successfully completed all requirements of the training course
+                    <strong>${accomplishment_copy_course_name}</strong>
+                    offered through the KKUx Academy, with full online attendance.
+                    <span class="cert-accordingly">Accordingly, this certificate is hereby awarded in recognition of commitment
+                    and fulfillment of all training requirements.
+                    % if fdate:
+                    Date: ${fdate}.
+                    % endif
+                    </span>
+                </span>
+            </div>
+
+            <!-- QR code (rendered client-side by qrcode.js) -->
+            <div id="qr-canvas" class="qr-image" data-url="${share_url}"></div>
+
+        </div>
+    </div>
+</template>
+
+<script>
+function printIframe() {
+    var iframe = document.getElementById('cert-frame');
+    if (!iframe) return;
+
+    // Gate print on the iframe having finished loading. The QR canvas is
+    // generated by initQR() inside the iframe's load handler (the qrcodejs
+    // library is fetched from a CDN), so calling print() before that fires
+    // captures an empty certificate with no QR code.
+    function doPrint() {
+        // Save the iframe's current inline styles so we can restore them
+        // after printing. The original code set width/height inline before
+        // printing but never restored, leaving the iframe stuck at 842px
+        // wide on small viewports until a page refresh.
+        var saved = {
+            width:      iframe.style.width,
+            height:     iframe.style.height,
+            minHeight:  iframe.style.minHeight,
+            display:    iframe.style.display,
+            margin:     iframe.style.margin,
+        };
+
+        // Force the iframe to its natural 842x595 so the certificate renders
+        // at full size — required for the print dialog to receive the
+        // document at the correct dimensions and for the QR to render at
+        // its full 94px.
+        iframe.style.width = '842px';
+        iframe.style.height = '595px';
+        iframe.style.minHeight = '595px';
+        iframe.style.display = 'block';
+        iframe.style.margin = '0 auto';
+
+        var restored = false;
+        function restore() {
+            if (restored) return;
+            restored = true;
+            iframe.style.width = saved.width;
+            iframe.style.height = saved.height;
+            iframe.style.minHeight = saved.minHeight;
+            iframe.style.display = saved.display;
+            iframe.style.margin = saved.margin;
+        }
+
+        // Wait one frame for the iframe to reflow, then print. Restore
+        // inline styles once we know the print dialog has closed.
+        requestAnimationFrame(function() {
+            try {
+                if (iframe.contentWindow) {
+                    iframe.contentWindow.focus();
+                    iframe.contentWindow.print();
+
+                    // afterprint is unreliable inside iframes in some
+                    // browsers (Edge, Firefox) — see SO #73011262.
+                    // Fall back to the parent window's focus event, which
+                    // fires reliably when focus returns from the print
+                    // dialog back to the parent.
+                    try {
+                        iframe.contentWindow.addEventListener('afterprint', restore);
+                    } catch (e) { /* cross-origin guard */ }
+                    var onParentFocus = function() {
+                        window.removeEventListener('focus', onParentFocus);
+                        restore();
+                    };
+                    window.addEventListener('focus', onParentFocus);
+                }
+            } catch (e) {
+                console.error('Print failed', e);
+            }
+            // Hard fallback in case neither afterprint nor focus fires
+            // (e.g. user dismissed the dialog with Escape on some browsers).
+            setTimeout(restore, 2000);
+        });
+    }
+
+    if (iframe.contentWindow && iframe.contentWindow.document.readyState === 'complete'
+        && iframe.getAttribute('data-cert-ready') === '1') {
+        doPrint();
+    } else {
+        // First wait for the iframe to finish loading — the outer script's
+        // iframe load handler sets data-cert-ready once adjustAll() runs.
+        iframe.addEventListener('load', function onLoad() {
+            iframe.removeEventListener('load', onLoad);
+            // The outer load handler runs synchronously before this fires;
+            // a microtask delay guarantees data-cert-ready is set.
+            Promise.resolve().then(doPrint);
+        });
+        // If the iframe is already loaded but data-cert-ready isn't set
+        // (race), kick off doPrint on the next tick.
+        if (iframe.contentWindow && iframe.contentWindow.document.readyState === 'complete') {
+            setTimeout(function() {
+                if (iframe.getAttribute('data-cert-ready') === '1') doPrint();
+            }, 100);
+        }
+    }
+}
+
+
+document.addEventListener('DOMContentLoaded', function() {
+    var iframe = document.getElementById('cert-frame');
+    var template = document.getElementById('certificate-source');
+    var internalStyles = document.getElementById('cert-internal-styles').innerHTML;
+
+    if (!iframe || !template) return;
+
+    var fonts = "";
+    document.querySelectorAll('link[rel="preconnect"], link[href*="fonts.googleapis"], link[href*="fonts.gstatic"]').forEach(function(el) {
+        fonts += el.outerHTML;
+    });
+
+    var script = '<script>' +
+    'function resizeCert() {' +
+        'var scaler = document.getElementById("scaler");' +
+        'if (!scaler) return;' +
+        'var naturalW = 842;' +
+        'var naturalH = 595;' +
+        'var vw = document.documentElement.clientWidth || window.innerWidth;' +
+        'if (!vw || vw < 10) { requestAnimationFrame(resizeCert); return; }' +
+        'var scale = Math.min(1, vw / naturalW);' +
+        'scaler.style.transform = "scale(" + scale + ")";' +
+        'scaler.style.transformOrigin = "top left";' +
+        'document.documentElement.style.height = (naturalH * scale) + "px";' +
+        'document.body.style.height = (naturalH * scale) + "px";' +
+        '}' +
+    'function adjustLearnerName() {' +
+        'var maxWidth;' +
+        'var ar = document.querySelector(".cert-name-ar");' +
+        'if (ar) {' +
+            'maxWidth = ar.parentElement ? ar.parentElement.offsetWidth : 284;' +
+            'ar.style.fontSize = "16px";' +
+            'var sz = 16;' +
+            'ar.style.whiteSpace = "nowrap";' +
+            'while (ar.scrollWidth > maxWidth && sz > 8) { sz--; ar.style.fontSize = sz + "px"; }' +
+        '}' +
+        'var en = document.querySelector(".cert-name-en");' +
+        'if (en) {' +
+            'maxWidth = en.parentElement ? en.parentElement.offsetWidth : 284;' +
+            'en.style.fontSize = "14px";' +
+            'var sz = 14;' +
+            'en.style.whiteSpace = "nowrap";' +
+            'while (en.scrollWidth > maxWidth && sz > 8) { sz--; en.style.fontSize = sz + "px"; }' +
+        '}' +
+    '}' +
+    'function adjustAll() { resizeCert(); adjustLearnerName(); }' +
+    'window.resizeCert = resizeCert;' +
+    'window.adjustAll = adjustAll;' +
+    'window.addEventListener("resize", adjustAll);' +
+    'window.addEventListener("load", adjustAll);' +
+    'document.addEventListener("DOMContentLoaded", adjustAll);' +
+    'function initQR() {' +
+        'var el = document.getElementById("qr-canvas");' +
+        'if (!el || !window.QRCode) return;' +
+        'if (el.childElementCount > 0) return;' +
+        'var url = el.getAttribute("data-url");' +
+        'if (!url) return;' +
+        'new QRCode(el, {' +
+            'text: url,' +
+            'width: 200,' +
+            'height: 200,' +
+            'colorDark: "#000000",' +
+            'colorLight: "#ffffff",' +
+            'correctLevel: QRCode.CorrectLevel.H' +
+        '});' +
+    '}' +
+    'window.addEventListener("load", function() { initQR(); adjustAll(); });' +
+    '<\/script>';
+
+    var docContent = '<!DOCTYPE html>' +
+        '<html dir="rtl">' +
+        '<head>' +
+            '<meta charset="utf-8">' +
+            fonts +
+            '<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"><\/script>' +
+            '<style>' + internalStyles + '</style>' +
+        '</head>' +
+        '<body>' +
+            template.innerHTML +
+            script +
+        '</body>' +
+        '</html>';
+
+    iframe.srcdoc = docContent;
+
+    function callIframeAdjustAll() {
+        try {
+            if (iframe.contentWindow && typeof iframe.contentWindow.adjustAll === 'function') {
+                iframe.contentWindow.adjustAll();
+            }
+        } catch (e) { /* cross-origin guard */ }
+    }
+
+    // Trigger adjustAll once iframe finishes loading, then remove skeleton shimmer
+    iframe.addEventListener('load', function() {
+        callIframeAdjustAll();
+        var wrapper = iframe.closest('.iframe-wrapper');
+        if (wrapper) wrapper.classList.add('cert-loaded');
+        // Mark the iframe as ready for printing — initQR has now run inside
+        // the iframe and the QR canvas is in the DOM.
+        iframe.setAttribute('data-cert-ready', '1');
+    });
+
+    // Safari/iOS does not reliably fire the iframe's own resize event
+    // when the outer container changes size via CSS, so we drive it here.
+    var _resizeTimer;
+    window.addEventListener('resize', function() {
+        clearTimeout(_resizeTimer);
+        _resizeTimer = setTimeout(callIframeAdjustAll, 60);
+    });
+});
+</script>
